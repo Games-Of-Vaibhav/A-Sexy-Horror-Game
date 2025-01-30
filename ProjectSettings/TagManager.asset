@@ -9,6 +9,7 @@ TagManager:
   - Floor
   - Ground
   - Shelf
+  - Key
   layers:
   - Default
   - TransparentFX
@@ -19,7 +20,7 @@ TagManager:
   - Do not render
   - Dynamic Objects
   - Player
-  - 
+  - Key
   - 
   - 
   - 

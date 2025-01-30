@@ -4,7 +4,7 @@ using UnityEngine.UI;
 public class GameManager : MonoBehaviour
 {
     [Header("UI Elements")]
-    public GameObject deathPanel;  // Reference to the death panel UI
+    public GameObject deathPanel, victoryPanel;  // Reference to the death panel UI
     public Button restartButton;   // Button to restart the level
     public Button mainMenuButton;  // Button to go to the main menu
 
@@ -14,6 +14,7 @@ public class GameManager : MonoBehaviour
     {
         // Ensure the death panel is initially hidden
         deathPanel.SetActive(false);
+        victoryPanel.SetActive(false);
 
         // Get the SceneManager reference
         sceneManager = FindObjectOfType<SceneManager>();
@@ -64,5 +65,11 @@ public class GameManager : MonoBehaviour
     private void ReturnToMainMenu()
     {
         sceneManager.LoadMainMenu();  // Call the LoadMainMenu method from SceneManager
+    }
+
+    public void ShowVictoryPanel()
+    {
+        victoryPanel.SetActive(true);
+        // Freeze player inputs if needed
     }
 }

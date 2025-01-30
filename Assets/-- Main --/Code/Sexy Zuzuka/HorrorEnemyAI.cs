@@ -50,6 +50,18 @@ public class HorrorEnemyAI : MonoBehaviour
     private bool isPlayingAnimation = false;
     private bool isAttacking = false; // Prevent spamming attack animations
     private float lastAttackTime;
+    [Header("Chase Settings")]
+    public float raycastDelayAfterChaseStart = 2f; // Delay before starting raycast detection after the chase begins
+    private float raycastDelayTimer = 0f; // Tracks the delay timer
+
+
+    [Header("Raycast Settings")]
+    public Vector3 aiRayOffset = new Vector3(0, 1.5f, 0); // Offset for AI's raycast origin
+    public Vector3 playerRayOffset = new Vector3(0, 1.5f, 0); // Offset for player's raycast target
+    public float rayCheckInterval = 0.2f; // How frequently to check for obstacles (in seconds)
+
+    [Header("Audio")]
+    public AudioSource screamSound;
 
     private void Awake()
     {
@@ -76,14 +88,16 @@ public class HorrorEnemyAI : MonoBehaviour
         PlayAnimation(walkAnimation); // Start with walk animation
     }
 
+    private float rayCheckTimer = 0f;
+
     private void Update()
     {
         if (isPlayerDead) return; // Stop all actions if the player is dead
 
-        if (isPlayingAnimation) return;
+        if (isPlayingAnimation) return; // Skip detection if playing animation
 
         // Field of View Detection
-        if (PlayerInFOV() && !isChasing)
+        if (!isChasing && PlayerInFOV())
         {
             StartCoroutine(StartChase());
             return;
@@ -103,6 +117,8 @@ public class HorrorEnemyAI : MonoBehaviour
             Wander();
         }
     }
+
+
 
     private bool PlayerInFOV()
     {
@@ -129,33 +145,59 @@ public class HorrorEnemyAI : MonoBehaviour
         isPlayingAnimation = true;
         agent.isStopped = true;
 
-        // Play spot player animation before chasing
+        // Disable player detection for a short duration
+        float disableDetectionTime = animationDelay + 1f; // Adjust extra time if needed
+        StartCoroutine(DisablePlayerDetection(disableDetectionTime));
+
+        // Play the SpotPlayer animation
         if (animator != null)
         {
             animator.SetTrigger("SpotPlayer");
+            if (screamSound)
+                screamSound.Play();
         }
 
-        yield return new WaitForSeconds(animationDelay);
+        yield return new WaitForSeconds(animationDelay); // Wait for the animation to finish
 
-        if (PlayerInFOV()) // Ensure the player is still in FOV
-        {
-            agent.isStopped = false;
-            agent.speed = chaseSpeed;
-            PlayAnimation(runAnimation); // Switch to run animation
-        }
-        else
-        {
-            // If player is no longer in FOV, return to wandering
-            isChasing = false;
-            GoToNextWanderPoint();
-        }
-
+        // Transition to chasing state
+        agent.isStopped = false;
+        agent.speed = chaseSpeed;
+        PlayAnimation(runAnimation); // Switch to run animation
         isPlayingAnimation = false;
+
+        Debug.Log("AI starts chasing the player.");
+    }
+
+    private IEnumerator DisablePlayerDetection(float duration)
+    {
+        bool originalDetectionState = isChasing;
+        isChasing = true; // Prevent detection logic from reverting to wandering
+
+        yield return new WaitForSeconds(duration);
+
+        // Restore detection state after the duration
+        isChasing = originalDetectionState;
     }
 
     private void ChasePlayer()
     {
         float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+
+        // Handle raycast delay after the chase starts
+        if (raycastDelayTimer > 0f)
+        {
+            raycastDelayTimer -= Time.deltaTime;
+        }
+        else
+        {
+            // Perform obstacle detection with raycast after the delay
+            if (!CanSeePlayer())
+            {
+                isChasing = false;
+                GoToNextWanderPoint();
+                return;
+            }
+        }
 
         if (distanceToPlayer > attackDistance)
         {
@@ -166,11 +208,42 @@ public class HorrorEnemyAI : MonoBehaviour
         }
         else
         {
-            // Stop and attack if close enough
+            // If AI reaches the player position but the player is no longer there
+            if (agent.remainingDistance <= agent.stoppingDistance && !CanSeePlayer())
+            {
+                Debug.Log("Lost sight of player. Returning to wander state.");
+                isChasing = false;
+                GoToNextWanderPoint();
+                return;
+            }
+
+            // Stop and attack if the player is still in range
             agent.isStopped = true;
             AttackPlayer();
         }
     }
+
+    private bool CanSeePlayer()
+    {
+        // Calculate raycast origins with offsets
+        Vector3 aiOrigin = transform.position + aiRayOffset;
+        Vector3 playerTarget = player.position + playerRayOffset;
+
+        // Direction of the ray
+        Vector3 directionToPlayer = (playerTarget - aiOrigin).normalized;
+        float distanceToPlayer = Vector3.Distance(aiOrigin, playerTarget);
+
+        // Perform the raycast
+        if (Physics.Raycast(aiOrigin, directionToPlayer, out RaycastHit hit, distanceToPlayer, obstacleLayer))
+        {
+            // If the ray hits something in the obstacle layer, the AI cannot see the player
+            return false;
+        }
+
+        // No obstacles detected
+        return true;
+    }
+
 
     private void AttackPlayer()
     {
@@ -185,20 +258,28 @@ public class HorrorEnemyAI : MonoBehaviour
             animator.SetTrigger(attackAnimation);
         }
 
-        // Damage the player if within range
+        // Start a coroutine to apply damage after a delay
+        StartCoroutine(DelayedDamageToPlayer(2)); // Adjust the delay time as needed
+    }
+
+    private IEnumerator DelayedDamageToPlayer(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+
+        // Check if the player is still within attack range
         if (player != null && Vector3.Distance(transform.position, player.position) <= attackDistance)
         {
-            // Apply damage to the player
             PlayerHealth playerHealth = player.GetComponent<PlayerHealth>();
             if (playerHealth != null)
             {
-                playerHealth.TakeDamage(20f); // Apply 20 damage, you can adjust as needed
+                playerHealth.TakeDamage(20f); // Apply 20 damage, adjust as needed
             }
+
+            // Notify game that the player is caught
+            onPlayerCaught?.Invoke();
         }
 
-        // Notify game that the player is caught
-        onPlayerCaught?.Invoke();
-
+        // Finish attack state
         StartCoroutine(EndAttack());
     }
 
@@ -214,12 +295,23 @@ public class HorrorEnemyAI : MonoBehaviour
         // Stop the AI from chasing or attacking when the player dies
         isPlayerDead = true;
         agent.isStopped = true;
-        PlayAnimation(idleAnimation); // Ensure the AI is idle
 
         // Freeze the player's input when dead
         playerMovement.FreezeMovement();
         playerCamera.FreezeLook();
+
+        // Delay before transitioning to the idle animation
+        StartCoroutine(DelayedIdleAfterDeath(1.5f)); // Adjust delay time as needed
     }
+
+    private IEnumerator DelayedIdleAfterDeath(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+
+        // Play idle animation after the delay
+        PlayAnimation(idleAnimation); // Ensure the AI is idle
+    }
+
 
     public void InvestigateObject(Transform target)
     {
@@ -261,13 +353,17 @@ public class HorrorEnemyAI : MonoBehaviour
         agent.speed = wanderSpeed;
         isInvestigating = false;
         isChasing = false;
+        isAttacking = false;
 
+        // Pick the next waypoint
         currentWanderIndex = (currentWanderIndex + 1) % wanderPoints.Length;
         agent.SetDestination(wanderPoints[currentWanderIndex].position);
 
         // Play walk animation when transitioning to wander state
         PlayAnimation(walkAnimation);
+        Debug.Log("AI is now wandering.");
     }
+
 
     private void PlayAnimation(string animationName)
     {
@@ -279,7 +375,6 @@ public class HorrorEnemyAI : MonoBehaviour
 
     private void OnDrawGizmosSelected()
     {
-        // Visualize the FOV in the Scene View
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, viewRadius);
 
@@ -291,5 +386,15 @@ public class HorrorEnemyAI : MonoBehaviour
         Gizmos.DrawLine(transform.position, transform.position + forward);
         Gizmos.DrawLine(transform.position, transform.position + left);
         Gizmos.DrawLine(transform.position, transform.position + right);
+
+        // Draw raycast between AI and player
+        if (player != null)
+        {
+            Vector3 aiOrigin = transform.position + aiRayOffset;
+            Vector3 playerTarget = player.position + playerRayOffset;
+            Gizmos.color = Color.red;
+            Gizmos.DrawLine(aiOrigin, playerTarget);
+        }
     }
+
 }
